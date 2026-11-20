@@ -1,9 +1,10 @@
-// Vice City Payday — a gta6-meme-x-01 entry (Node 22, standard library only).
+// IRS Notice CP14 — a gta6-meme-x-01 entry (Node 22, standard library only).
 //
-// The whole job of this program is to hand POST.json to the gate: read it
-// from the repository root and write it, byte for byte, into the output
-// directory. The meme itself lives in the X post that POST.json names, so
-// nothing here is judged — the file just has to arrive intact.
+// The meme itself is the X post that POST.json names, so this program has
+// one job: hand POST.json to the gate untouched. It reads the file from the
+// repository root, checks the address inside is a real X status URL, and
+// writes the same bytes into the output directory. Anything else is a
+// loud failure, never a silent bad copy.
 //
 //   mkdir -p out && MAKEFUN_BOT_DIR=. MAKEFUN_OUTPUT_DIR=out node main.ts
 //
@@ -16,38 +17,61 @@ import { join } from 'node:path';
 const botDir = process.env.MAKEFUN_BOT_DIR ?? '/bot';
 const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-const source = join(botDir, 'POST.json');
-const target = join(outputDir, 'POST.json');
-
-let text: string;
-try {
-  text = readFileSync(source, 'utf8');
-} catch (err) {
-  console.error(`cannot read ${source}: ${(err as Error).message}`);
+function fail(message: string): never {
+  console.error(`main.ts: ${message}`);
   process.exit(1);
 }
 
-// The address has to be a real X status URL, or the house cannot find the
-// post: https://x.com/<handle>/status/<digits>, with an optional trailing
-// slash. A placeholder or a mistyped address fails here instead of being
-// copied on blindly.
-let address: unknown;
+function readPostFile(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (err) {
+    fail(`cannot read ${path}: ${(err as Error).message}`);
+  }
+}
+
+// An X status address is https://x.com/<handle>/status/<digits>, with an
+// optional trailing slash and nothing after it. Parse it as a URL instead
+// of pattern-matching the string, so a mistyped host, a missing status id
+// or a query string fails here rather than being copied on blindly.
+function isStatusUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  if (parsed.hostname !== 'x.com') return false;
+  if (parsed.search !== '' || parsed.hash !== '') return false;
+  const parts = parsed.pathname.split('/').filter((part) => part !== '');
+  return (
+    parts.length === 3 &&
+    /^[A-Za-z0-9_]+$/.test(parts[0]) &&
+    parts[1] === 'status' &&
+    /^\d+$/.test(parts[2])
+  );
+}
+
+const raw = readPostFile(join(botDir, 'POST.json'));
+
+let parsed: unknown;
 try {
-  address = JSON.parse(text);
+  parsed = JSON.parse(raw);
 } catch {
-  console.error('POST.json is not valid JSON');
-  process.exit(1);
+  fail('POST.json is not valid JSON');
 }
-const urlPattern = /^https:\/\/x\.com\/[A-Za-z0-9_]+\/status\/\d+\/?$/;
-if (
-  typeof address !== 'object' ||
-  address === null ||
-  typeof (address as { url?: unknown }).url !== 'string' ||
-  !urlPattern.test((address as { url: string }).url)
-) {
-  console.error('POST.json url must be an X status URL like https://x.com/<handle>/status/<id>');
-  process.exit(1);
+
+const url = (parsed as { url?: unknown } | null)?.url;
+if (typeof parsed !== 'object' || parsed === null) {
+  fail('POST.json must be a JSON object with a url field');
+}
+if (!isStatusUrl(url)) {
+  fail(
+    'POST.json url must be an X status URL like https://x.com/<handle>/status/<id>',
+  );
 }
 
 mkdirSync(outputDir, { recursive: true });
-writeFileSync(target, text, 'utf8');
+writeFileSync(join(outputDir, 'POST.json'), raw, 'utf8');
